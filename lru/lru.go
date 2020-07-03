@@ -20,6 +20,7 @@ package lru
 import "container/list"
 
 // Cache is an LRU cache. It is not safe for concurrent access.
+// 双端队列+哈希表=LRU
 type Cache struct {
 	// MaxEntries is the maximum number of cache entries before
 	// an item is evicted. Zero means no limit.
@@ -58,6 +59,8 @@ func (c *Cache) Add(key Key, value interface{}) {
 		c.cache = make(map[interface{}]*list.Element)
 		c.ll = list.New()
 	}
+
+	// 如果缓存中已经有这个值， 将这个值放到队列前端
 	if ee, ok := c.cache[key]; ok {
 		c.ll.MoveToFront(ee)
 		ee.Value.(*entry).value = value
@@ -65,6 +68,7 @@ func (c *Cache) Add(key Key, value interface{}) {
 	}
 	ele := c.ll.PushFront(&entry{key, value})
 	c.cache[key] = ele
+	// 如果元素个数大于MaxEntries， 删除列表尾部的数据
 	if c.MaxEntries != 0 && c.ll.Len() > c.MaxEntries {
 		c.RemoveOldest()
 	}
@@ -75,6 +79,7 @@ func (c *Cache) Get(key Key) (value interface{}, ok bool) {
 	if c.cache == nil {
 		return
 	}
+	// 如果缓存中已经有这个值， 将这个值放到队列前端
 	if ele, hit := c.cache[key]; hit {
 		c.ll.MoveToFront(ele)
 		return ele.Value.(*entry).value, true

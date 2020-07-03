@@ -29,6 +29,7 @@ import (
 //
 // A ByteView is meant to be used as a value type, not
 // a pointer (like a time.Time).
+// 用来存储value的数据结构
 type ByteView struct {
 	// If b is non-nil, b is used, else s is used.
 	b []byte
