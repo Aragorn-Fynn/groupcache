@@ -144,6 +144,9 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.URL.Path, p.opts.BasePath) {
 		panic("HTTPPool serving unexpected path: " + r.URL.Path)
 	}
+
+	// 分割URL，并从中提取group和key值，示例请求URL为：https://example.net:8000/_groupcache/groupname/key
+	// 分割后的结果： [groupname, key]
 	parts := strings.SplitN(r.URL.Path[len(p.opts.BasePath):], "/", 2)
 	if len(parts) != 2 {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -153,6 +156,7 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := parts[1]
 
 	// Fetch the value for this group/key.
+	// 根据url中提取的groupname 获取group
 	group := GetGroup(groupName)
 	if group == nil {
 		http.Error(w, "no such group: "+groupName, http.StatusNotFound)
@@ -167,6 +171,7 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	group.Stats.ServerRequests.Add(1)
 	var value []byte
+	// 获取指定key对应的缓存
 	err := group.Get(ctx, key, AllocatingByteSliceSink(&value))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -174,12 +179,15 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write the value to the response body as a proto message.
+	// 序列化响应内容
 	body, err := proto.Marshal(&pb.GetResponse{Value: value})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// 设置http头
 	w.Header().Set("Content-Type", "application/x-protobuf")
+	// 设置http body
 	w.Write(body)
 }
 
@@ -192,13 +200,18 @@ var bufferPool = sync.Pool{
 	New: func() interface{} { return new(bytes.Buffer) },
 }
 
+// 该方法根据需要向对等节点查询缓存
 func (h *httpGetter) Get(ctx context.Context, in *pb.GetRequest, out *pb.GetResponse) error {
+
+	// 生成请求url
 	u := fmt.Sprintf(
 		"%v%v/%v",
 		h.baseURL,
 		url.QueryEscape(in.GetGroup()),
 		url.QueryEscape(in.GetKey()),
 	)
+
+	// 新建Get请求
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
 		return err
@@ -208,6 +221,8 @@ func (h *httpGetter) Get(ctx context.Context, in *pb.GetRequest, out *pb.GetResp
 	if h.transport != nil {
 		tr = h.transport(ctx)
 	}
+
+	// 执行请求
 	res, err := tr.RoundTrip(req)
 	if err != nil {
 		return err
@@ -223,6 +238,8 @@ func (h *httpGetter) Get(ctx context.Context, in *pb.GetRequest, out *pb.GetResp
 	if err != nil {
 		return fmt.Errorf("reading response body: %v", err)
 	}
+
+	// 反序列化字节数组
 	err = proto.Unmarshal(b.Bytes(), out)
 	if err != nil {
 		return fmt.Errorf("decoding response body: %v", err)

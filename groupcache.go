@@ -150,6 +150,7 @@ type Group struct {
 	// (amongst its peers) is authoritative. That is, this cache
 	// contains keys which consistent hash on to this process's
 	// peer number.
+	// 本地cache， 保存当前节点上的数据
 	mainCache cache
 
 	// hotCache contains keys/values for which this peer is not
@@ -160,16 +161,19 @@ type Group struct {
 	// network card could become the bottleneck on a popular key.
 	// This cache is used sparingly to maximize the total number
 	// of key/value pairs that can be stored globally.
+	// 当前节点miss， 会从其他节点请求数据， 然后保存到hotCache中
 	hotCache cache
 
 	// loadGroup ensures that each key is only fetched once
 	// (either locally or remotely), regardless of the number of
 	// concurrent callers.
+	// 保证对一个key的请求只会请求一次
 	loadGroup flightGroup
 
 	_ int32 // force Stats to be 8-byte aligned on 32-bit platforms
 
 	// Stats are statistics on the group.
+	// 统计数据
 	Stats Stats
 }
 
@@ -206,13 +210,18 @@ func (g *Group) initPeers() {
 }
 
 func (g *Group) Get(ctx context.Context, key string, dest Sink) error {
+	// 首次运行，初始化对等节点
 	g.peersOnce.Do(g.initPeers)
+	// 设置stats
 	g.Stats.Gets.Add(1)
 	if dest == nil {
 		return errors.New("groupcache: nil dest Sink")
 	}
+
+	// 本地缓存查找
 	value, cacheHit := g.lookupCache(key)
 
+	// 本地缓存命中
 	if cacheHit {
 		g.Stats.CacheHits.Add(1)
 		return setSinkView(dest, value)
@@ -258,6 +267,7 @@ func (g *Group) load(ctx context.Context, key string, dest Sink) (value ByteView
 		// 1: fn()
 		// 2: loadGroup.Do("key", fn)
 		// 2: fn()
+		// 防止了略有先后的两个请求可能导致两次重复对peer的访问，比如后来的请求在第一个请求还没有发起对等节点查询的时候发起
 		if value, cacheHit := g.lookupCache(key); cacheHit {
 			g.Stats.CacheHits.Add(1)
 			return value, nil
@@ -265,7 +275,9 @@ func (g *Group) load(ctx context.Context, key string, dest Sink) (value ByteView
 		g.Stats.LoadsDeduped.Add(1)
 		var value ByteView
 		var err error
+		// 根据分布式一致性hash查找对应节点， ok为true表明不是本机
 		if peer, ok := g.peers.PickPeer(key); ok {
+			// 向对应节点请求数据
 			value, err = g.getFromPeer(ctx, peer, key)
 			if err == nil {
 				g.Stats.PeerLoads.Add(1)
@@ -277,6 +289,8 @@ func (g *Group) load(ctx context.Context, key string, dest Sink) (value ByteView
 			// probably boring (normal task movement), so not
 			// worth logging I imagine.
 		}
+
+		// peer未找到该节点，或者该key属于本节点管辖，应该请求向数据源获取数据，调用group初始化的getter回调函数
 		value, err = g.getLocally(ctx, key, dest)
 		if err != nil {
 			g.Stats.LocalLoadErrs.Add(1)
@@ -333,6 +347,7 @@ func (g *Group) lookupCache(key string) (value ByteView, ok bool) {
 	return
 }
 
+// 将数据放入本地缓存中， 如果有需要， 将某些数据踢出缓存
 func (g *Group) populateCache(key string, value ByteView, cache *cache) {
 	if g.cacheBytes <= 0 {
 		return
